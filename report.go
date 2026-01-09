@@ -26,7 +26,7 @@ type report struct {
 
 func generateReport(acceptedStalenessLimit, builtStalenessLimit, upgradeStalenessLimit time.Duration, oldestMinor, newestMinor int, arch string) (*report, error) {
 	if oldestMinor == -1 || newestMinor == -1 {
-		oldestSupportedMinor, newestSupportedMinor, err := getSupportedReleases("https://access.redhat.com/product-life-cycles/api/v1/products?name=Openshift%20Container%20Platform%204")
+		oldestSupportedMinor, newestSupportedMinor, err := getSupportedReleases("https://access.redhat.com/product-life-cycles/api/v1/products?name=OpenShift%20Container%20Platform")
 		if err != nil {
 			return nil, err
 		}
