@@ -113,15 +113,16 @@ func (o *options) createHandler() http.HandlerFunc {
 Arguments:
   *min=X* - only look at z-streams with a minimum version of X, e.g. *min=9*
   *max=X* - only look at z-streams with a maximum version of X, e.g. *max=12*
+  *major=X* - report on major version X (e.g. *major=5*), default is *%d*
   *arch=X* - look at architecture X, where X is one of [*amd64*, *multi*, *arm64*, *ppc64le*, *s390x*]
   *healthy* - include healthy z-streams in the report
   *tag* - tag patch manager with the report output
 Current settings/defaults:
   Accepted payloads must be newer than *%0.1f* hours
   Payloads must have been built within the last *%0.1f* hours
-  Default: Included releases are >=*4.%d* and <=*4.%d*
+  Default: Included releases are >=*%d.%d* and <=*%d.%d*
   Default: Architecture is *%s*
-  Default: Fully healthy z-streams are not included in the report`, o.acceptedStalenessLimit.Hours(), o.builtStalenessLimit.Hours(), o.oldestMinor, o.newestMinor, o.arch)
+  Default: Fully healthy z-streams are not included in the report`, o.majorVersion, o.acceptedStalenessLimit.Hours(), o.builtStalenessLimit.Hours(), o.majorVersion, o.oldestMinor, o.majorVersion, o.newestMinor, o.arch)
 			case strings.Contains(req.Event.Text, "report"):
 				reportOptions := *o
 				reportOptions.includeHealthy = false
@@ -158,6 +159,15 @@ Current settings/defaults:
 								return
 							}
 							reportOptions.newestMinor = i
+						case "major":
+							i, err := strconv.Atoi(v[1])
+							if err != nil {
+								err = fmt.Errorf("error parsing major version value %q: %w", v[1], err)
+								_, _ = sendMessage(err.Error(), req.Event.Channel, thread)
+								http.Error(w, err.Error(), http.StatusInternalServerError)
+								return
+							}
+							reportOptions.majorVersion = i
 						case "arch":
 							reportOptions.arch = v[1]
 						}
@@ -165,7 +175,7 @@ Current settings/defaults:
 
 				}
 
-				rep, err := generateReport(reportOptions.acceptedStalenessLimit, reportOptions.builtStalenessLimit, reportOptions.upgradeStalenessLimit, reportOptions.oldestMinor, reportOptions.newestMinor, reportOptions.arch)
+				rep, err := generateReport(reportOptions.majorVersion, reportOptions.acceptedStalenessLimit, reportOptions.builtStalenessLimit, reportOptions.upgradeStalenessLimit, reportOptions.oldestMinor, reportOptions.newestMinor, reportOptions.arch)
 				if err != nil {
 					subject = fmt.Sprintf("Sorry, an error occurred generating the report: %v", err)
 				} else {
@@ -176,7 +186,7 @@ Current settings/defaults:
 						}
 
 					}
-					subject = fmt.Sprintf("Latest payload stream health report thread for `%s`, `v4.%d` to `v4.%d` (%d of %d streams unhealthy)", reportOptions.arch, rep.oldestMinor, rep.newestMinor, numUnhealthy, len(rep.streams))
+					subject = fmt.Sprintf("Latest payload stream health report thread for `%s`, `v%d.%d` to `v%d.%d` (%d of %d streams unhealthy)", reportOptions.arch, rep.majorVersion, rep.oldestMinor, rep.majorVersion, rep.newestMinor, numUnhealthy, len(rep.streams))
 					msg = rep.String(reportOptions.includeHealthy)
 				}
 				if tagPatchManager {
