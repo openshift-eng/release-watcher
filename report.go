@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -19,14 +20,18 @@ type releaseReport struct {
 
 type report struct {
 	streams       map[string]*releaseReport
+	majorVersion  int
 	oldestMinor   int
 	newestMinor   int
 	releaseAPIUrl string
 }
 
-func generateReport(acceptedStalenessLimit, builtStalenessLimit, upgradeStalenessLimit time.Duration, oldestMinor, newestMinor int, arch string) (*report, error) {
+func generateReport(majorVersion int, acceptedStalenessLimit, builtStalenessLimit, upgradeStalenessLimit time.Duration, oldestMinor, newestMinor int, arch string) (*report, error) {
+	zRegex := buildZReleaseRegex(majorVersion)
+	minorRegex := buildExtractMinorRegex(majorVersion)
+
 	if oldestMinor == -1 || newestMinor == -1 {
-		oldestSupportedMinor, newestSupportedMinor, err := getSupportedReleases("https://access.redhat.com/product-life-cycles/api/v1/products?name=Openshift%20Container%20Platform%204")
+		oldestSupportedMinor, newestSupportedMinor, err := getSupportedReleases("https://access.redhat.com/product-life-cycles/api/v1/products?name=OpenShift%20Container%20Platform", majorVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -62,13 +67,14 @@ func generateReport(acceptedStalenessLimit, builtStalenessLimit, upgradeStalenes
 		return nil, err
 	}
 
-	report := checkUpgrades(stableGraph, allReleases, upgradeStalenessLimit, oldestMinor, newestMinor)
+	report := checkUpgrades(stableGraph, allReleases, upgradeStalenessLimit, oldestMinor, newestMinor, zRegex, minorRegex)
+	report.majorVersion = majorVersion
 	report.releaseAPIUrl = releaseAPIUrl
 
 	klog.V(4).Info("Checking streams for accepted payloads\n")
-	acceptedEmpty, acceptedStale := getEmptyAndStaleStreams(acceptedReleases, acceptedStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl)
+	acceptedEmpty, acceptedStale := getEmptyAndStaleStreams(acceptedReleases, acceptedStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl, zRegex)
 	klog.V(4).Info("Checking streams for all payloads\n")
-	allEmpty, allStale := getEmptyAndStaleStreams(allReleases, acceptedStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl)
+	allEmpty, allStale := getEmptyAndStaleStreams(allReleases, acceptedStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl, zRegex)
 
 	for stream := range acceptedEmpty {
 		klog.V(4).Infof("Examining stream %s which has no accepted payloads", stream)
@@ -91,7 +97,7 @@ func generateReport(acceptedStalenessLimit, builtStalenessLimit, upgradeStalenes
 	}
 
 	klog.V(4).Infof("Checking streams for very stale payloads\n")
-	_, allVeryStale := getEmptyAndStaleStreams(allReleases, builtStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl)
+	_, allVeryStale := getEmptyAndStaleStreams(allReleases, builtStalenessLimit, oldestMinor, newestMinor, releaseAPIUrl, zRegex)
 
 	for stream, age := range allVeryStale {
 		report.streams[stream].unhealthyMessages = append(report.streams[stream].unhealthyMessages, fmt.Sprintf("Most recently built payload was %.1f days ago", age.Hours()/24))
@@ -107,10 +113,11 @@ func (rep *report) String(includeHealthy bool) string {
 	}
 
 	sort.Strings(streams)
+	minorRegex := buildExtractMinorRegex(rep.majorVersion)
 	sort.Slice(streams, func(i, j int) bool {
-		iMatches := extractMinorRegex.FindStringSubmatch(streams[i])
+		iMatches := minorRegex.FindStringSubmatch(streams[i])
 		iVersion, _ := strconv.Atoi(iMatches[1])
-		jMatches := extractMinorRegex.FindStringSubmatch(streams[j])
+		jMatches := minorRegex.FindStringSubmatch(streams[j])
 		jVersion, _ := strconv.Atoi(jMatches[1])
 		// this deliberately reverses the standard sorting order so we
 		// get highest to lowest.
@@ -146,7 +153,7 @@ func (rep *report) String(includeHealthy bool) string {
 	if !includeHealthy && len(output) == 0 {
 		output += "No unhealthy payload streams detected\n"
 	}
-	output += fmt.Sprintf("\nIgnored releases older than 4.%d.z and newer than 4.%d.z\n", rep.oldestMinor, rep.newestMinor)
+	output += fmt.Sprintf("\nIgnored releases older than %d.%d.z and newer than %d.%d.z\n", rep.majorVersion, rep.oldestMinor, rep.majorVersion, rep.newestMinor)
 	return output
 }
 
@@ -171,7 +178,7 @@ func getReleaseStream(url string) (map[string][]string, error) {
 	return releases, nil
 }
 
-func getEmptyAndStaleStreams(releases map[string][]string, threshold time.Duration, oldestMinor, newestMinor int, releaseAPIUrl string) (map[string]struct{}, map[string]time.Duration) {
+func getEmptyAndStaleStreams(releases map[string][]string, threshold time.Duration, oldestMinor, newestMinor int, releaseAPIUrl string, zRegex *regexp.Regexp) (map[string]struct{}, map[string]time.Duration) {
 	emptyStreams := make(map[string]struct{})
 	staleStreams := make(map[string]time.Duration)
 	releaseKeys := reflect.ValueOf(releases).MapKeys()
@@ -179,7 +186,7 @@ func getEmptyAndStaleStreams(releases map[string][]string, threshold time.Durati
 	for _, k := range releaseKeys {
 		stream := k.String()
 
-		matches := zReleaseRegex.FindStringSubmatch(stream)
+		matches := zRegex.FindStringSubmatch(stream)
 
 		if matches == nil {
 			//fmt.Printf("ignoring non z-stream release %s\n", stream)
@@ -299,7 +306,7 @@ func (f *found) Days() float64 {
 	return f.Age.Hours() / 24
 }
 
-func checkUpgrades(graph GraphMap, releases map[string][]string, stalenessThreshold time.Duration, oldestMinor, newestMinor int) *report {
+func checkUpgrades(graph GraphMap, releases map[string][]string, stalenessThreshold time.Duration, oldestMinor, newestMinor int, zRegex, minorRegex *regexp.Regexp) *report {
 	rep := &report{
 		streams:     make(map[string]*releaseReport, len(releases)),
 		oldestMinor: oldestMinor,
@@ -309,7 +316,7 @@ func checkUpgrades(graph GraphMap, releases map[string][]string, stalenessThresh
 	now := time.Now()
 	for release, payloads := range releases {
 
-		matches := zReleaseRegex.FindStringSubmatch(release)
+		matches := zRegex.FindStringSubmatch(release)
 
 		if matches == nil {
 			klog.V(4).Infof("not checking upgrade status for non z-stream release %s", release)
@@ -338,7 +345,7 @@ func checkUpgrades(graph GraphMap, releases map[string][]string, stalenessThresh
 			if age.Minutes() > stalenessThreshold.Minutes() {
 				continue
 			}
-			toMatches := extractMinorRegex.FindStringSubmatch(payload)
+			toMatches := minorRegex.FindStringSubmatch(payload)
 			if toMatches == nil {
 				continue
 			}
@@ -346,7 +353,7 @@ func checkUpgrades(graph GraphMap, releases map[string][]string, stalenessThresh
 
 			for _, from := range graph[payload] {
 
-				fromMatches := extractMinorRegex.FindStringSubmatch(from)
+				fromMatches := minorRegex.FindStringSubmatch(from)
 
 				if fromMatches == nil {
 					klog.V(4).Infof("Ignoring upgrade to %s from %s because the minor version could not be determined\n", payload, from)

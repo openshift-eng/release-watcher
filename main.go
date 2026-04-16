@@ -16,12 +16,19 @@ const (
 	allReleasePath      = "/api/v1/releasestreams/all"
 )
 
+// buildZReleaseRegex returns a compiled regex matching z-stream release names
+// for the given major version, e.g. "4.NNN.0-0.ci" or "4.NNN.0-0.nightly".
+func buildZReleaseRegex(major int) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`%d\.([1-9][0-9]*)\.0-0\.(ci|nightly)`, major))
+}
+
+// buildExtractMinorRegex returns a compiled regex that extracts the minor
+// version from a version string like "4.12.3".
+func buildExtractMinorRegex(major int) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`%d\.([1-9][0-9]*)\.[0-9]+`, major))
+}
+
 var (
-	// match these two formats:
-	// 4.NNN.0-0.ci
-	// 4.NNN.0-0.nightly
-	zReleaseRegex     = regexp.MustCompile(`4\.([1-9][0-9]*)\.0-0\.(ci|nightly)`)
-	extractMinorRegex = regexp.MustCompile(`4\.([1-9][0-9]*)\.[0-9]+`)
 	// YYYY-MM-DD-HHMMSS
 	extractDateRegex = regexp.MustCompile(`([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{2})([0-9]{2})([0-9]{2})$`)
 
@@ -52,6 +59,7 @@ var (
 //   no build newer than a week exists in the stream - either there have been no changes in the code(ok) or our build system is broken (not ok).  - ????
 
 type options struct {
+	majorVersion           int
 	oldestMinor            int
 	newestMinor            int
 	slackAlias             string
@@ -120,6 +128,7 @@ func newBotCommand() *cobra.Command {
 }
 
 func addSharedFlags(flagset *pflag.FlagSet, o *options) {
+	flagset.IntVar(&o.majorVersion, "major-version", 4, "The major OCP version to analyze")
 	flagset.IntVar(&o.oldestMinor, "oldest-minor", -1, "The oldest minor release to analyze.  Release streams older than this will be ignored.  Specify only the minor value (e.g. \"9\") (default to looking up the newest supported release)")
 	flagset.IntVar(&o.newestMinor, "newest-minor", -1, "The newest minor release to analyze.  Release streams newer than this will be ignored.  Specify only the minor value (e.g. \"12\") (default to looking up the newest supported release)")
 	flagset.DurationVar(&o.acceptedStalenessLimit, "accepted-staleness-limit", 24*time.Hour, "How old an accepted payload can be before it is considered stale")
@@ -130,7 +139,7 @@ func addSharedFlags(flagset *pflag.FlagSet, o *options) {
 }
 
 func (o *options) runReport() error {
-	report, err := generateReport(o.acceptedStalenessLimit, o.builtStalenessLimit, o.upgradeStalenessLimit, o.oldestMinor, o.newestMinor, o.arch)
+	report, err := generateReport(o.majorVersion, o.acceptedStalenessLimit, o.builtStalenessLimit, o.upgradeStalenessLimit, o.oldestMinor, o.newestMinor, o.arch)
 	if err != nil {
 		return err
 	}
