@@ -63,13 +63,14 @@ func TestParseReportArguments(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name               string
-		text               string
-		wantMajor          int
-		wantOldestMinor    int
-		wantNewestMinor    int
-		wantArch           string
-		wantIncludeHealthy bool
+		name                string
+		text                string
+		wantMajor           int
+		wantOldestMinor     int
+		wantNewestMinor     int
+		wantArch            string
+		wantIncludeHealthy  bool
+		wantTagPatchManager bool
 	}{
 		{
 			name:            "defaults",
@@ -104,13 +105,23 @@ func TestParseReportArguments(t *testing.T) {
 			wantArch:        "arm64",
 		},
 		{
-			name:               "all arguments combined",
-			text:               "report major=5 min=1 max=3 arch=multi healthy",
-			wantMajor:          5,
-			wantOldestMinor:    1,
-			wantNewestMinor:    3,
-			wantArch:           "multi",
-			wantIncludeHealthy: true,
+			name:                "tag patch manager",
+			text:                "report tag",
+			wantMajor:           4,
+			wantOldestMinor:     14,
+			wantNewestMinor:     17,
+			wantArch:            "amd64",
+			wantTagPatchManager: true,
+		},
+		{
+			name:                "all arguments combined",
+			text:                "report major=5 min=1 max=3 arch=multi healthy tag",
+			wantMajor:           5,
+			wantOldestMinor:     1,
+			wantNewestMinor:     3,
+			wantArch:            "multi",
+			wantIncludeHealthy:  true,
+			wantTagPatchManager: true,
 		},
 	}
 
@@ -129,9 +140,13 @@ func TestParseReportArguments(t *testing.T) {
 			}
 			reportOptions := baseOpts
 			reportOptions.includeHealthy = false
+			tagPatchManager := false
 
 			args := strings.Split(tt.text, " ")
 			for _, arg := range args {
+				if arg == "tag" {
+					tagPatchManager = true
+				}
 				if arg == "healthy" {
 					reportOptions.includeHealthy = true
 				}
@@ -173,6 +188,9 @@ func TestParseReportArguments(t *testing.T) {
 			}
 			if reportOptions.includeHealthy != tt.wantIncludeHealthy {
 				t.Errorf("includeHealthy: got %v, want %v", reportOptions.includeHealthy, tt.wantIncludeHealthy)
+			}
+			if tagPatchManager != tt.wantTagPatchManager {
+				t.Errorf("tagPatchManager: got %v, want %v", tagPatchManager, tt.wantTagPatchManager)
 			}
 		})
 	}
